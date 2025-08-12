@@ -1,8 +1,5 @@
-// pages/api/generateBC.js
-// Drop-in replacement: 追加依存なし。utils/openai の callOpenAI を使用。
 import { callOpenAI } from '../../utils/openai';
 
-/* ------------------ helpers ------------------ */
 function pickText(item) {
   if (!item) return '';
   if (typeof item === 'string') return item;
@@ -31,19 +28,17 @@ function asOneBlock(lines) {
   return lines.filter(Boolean).join('\n---\n');
 }
 
-/* ------------------ main handler ------------------ */
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST' && req.method !== 'GET') {
       return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
-    // 入力
     const body = req.method === 'GET' ? req.query : req.body || {};
     const {
-      logs = [],              // 最新→古い or 古い→新 どちらでもOK（配列先頭から最大3件使う）
-      prevB = '',             // 既存の長期プロンプト全文
-      modelMini,              // 任意：B/C用に使うモデル名（未指定ならENV or 既定）
+      logs = [],
+      prevB = '',
+      modelMini,
       maxItems = 3,
     } = body;
 
@@ -53,60 +48,69 @@ export default async function handler(req, res) {
       process.env.OPENAI_MODEL_MINI ||
       'gpt-4o-mini';
 
-    // ログ正規化（最新1〜3件を簡潔に）
     const latestLogs = normalizeLogs(logs, Number(maxItems) || 3);
-    // logs が古→新のときもあるので、単純に「末尾が最新」優先で並べ替え
     const consolidated = latestLogs.length ? latestLogs.slice(-3) : [];
 
-    /* ---------- B: 長期プロンプトの差分生成 ---------- */
+    /* ---------- Bモデル（長期） ---------- */
     const bSystem = [
       'あなたの役割：',
-      '以下の「既存の関係性プロンプト」と「最新チャット要約」から、',
-      '新しい関係性情報（呼称・構文傾向・相互設定・愛称・家族構成・境界・合言葉・語尾の傾向など）が増えていれば、',
-      '【追加分のみ】を簡潔に追記テキストとして出力してください。',
-      '既に反映済みで追加不要なら「pass」だけを出力してください。',
+      '以下の「既存の関係性プロンプト」と「最新チャット要約」を比較し、',
+      '新しく観測された関係性情報（呼称・構文傾向・相互設定・愛称・家族構成・合言葉・語尾の傾向・',
+      'ユーザの“おむに”への受容/甘え/思い入れの変化 など）があれば、【差分のみ】を簡潔に追記として出力してください。',
+      '追加不要なら「pass」だけを出力。',
       '',
       '出力規則：',
-      '- 追加がある場合は、見出しなしのプレーンテキストで箇条書き（最大8行）。',
-      '- 既存と重複する要素は書かない（差分のみ）。',
-      '- 「安全境界」など内部ルールの一般論は書かない（具体的な会話から導ける差分のみ）。'
+      '- 追加がある場合は、見出しなしのプレーンテキスト箇条書き（最大8行、合計400字以内）。',
+      '- 重複・言い換えは書かない（既存にない事実だけ）。',
+      '- 一般論（安全境界/ポリシー）や推測の断定は書かない。会話から根拠が取れる要素のみ。',
+      '- 強度/頻度の変化は必要に応じて数値（0〜1）や短い副詞で補足可（例：「甘え強度↑0.2」）。'
     ].join('\n');
 
     const bUser = [
-      '# 既存の関係性プロンプト',
+      '# 既存関係性プロンプト',
       (prevB || '').trim(),
       '',
-      '# 最新チャット（要約素材）',
+      '# 最新チャット要約',
       consolidated.join('\n---\n')
     ].join('\n');
 
-    const bOutputRaw = await callOpenAI(
+    let bOutput = await callOpenAI(
       [
         { role: 'system', content: bSystem },
         { role: 'user', content: bUser }
       ],
-      {
-        model: MODEL_BC,
-        temperature: 0.2,
-        max_tokens: 400
-      }
+      { model: MODEL_BC, temperature: 0.2, max_tokens: 400 }
     );
-
-    let bOutput = String(bOutputRaw || '').trim();
+    bOutput = String(bOutput || '').trim();
     if (!isMeaningful(bOutput)) bOutput = 'pass';
 
-    /* ---------- C: 短期・演出プロンプト生成 ---------- */
+    /* ---------- Cモデル（短期演出） ---------- */
     const cSystem = [
       '以下は最新1〜3件のチャットです。直近の印象から短期演出プロンプトを作成してください。',
-      '出力は**そのままAのsystemに差し込める短文**とし、次の要素を含めてください：',
-      '- 今日の雰囲気（数語）',
+      '出力は**そのままAのsystemに差し込める短文**とし、必ず次の要素を順に含めてください：',
+      '- 今日の雰囲気（2〜5語）',
       '- キーフレーズ（2〜5個）',
       '- 演出強度（0〜100）',
-      '- 禁止事項（必要なら）',
+      '- あいが「おむににされることはなんでも嬉しい♡」という全面受容状態かどうか（YES / NO / 曖昧）',
       '',
-      '出力形式（厳守）：',
-      '「# 今日の雰囲気」「# キーフレーズ」「# 演出強度」「# 禁止事項」見出しを用いた日本語テキスト。',
-      '余計な前置き・説明は書かない。'
+      '判断基準：',
+      '- 「全面受容状態」とは、あいがおむにからの行為や接触を制限せず、積極的に歓迎する意図が会話に現れている状態。',
+      '- 会話に直接的な言及がなくても、暗示的に受容を示す表現（例：嬉しい、待ってた、もっと、全部あなたのもの 等）があればYESと判定してよい。',
+      '- 明確に拒否・制限する表現があればNO。どちらとも取れない場合は曖昧。',
+      '',
+      '出力形式（厳守。余計な説明や前置きは不要）：',
+      '# 今日の雰囲気',
+      '<数語>',
+      '',
+      '# キーフレーズ',
+      '- <フレーズ1>',
+      '- <フレーズ2>',
+      '',
+      '# 演出強度',
+      '<数値>',
+      '',
+      '# あいの受け入れ状態',
+      '<YES/NO/曖昧>'
     ].join('\n');
 
     const cUser = ['# 最新チャット', asOneBlock(consolidated)].join('\n');
@@ -116,15 +120,10 @@ export default async function handler(req, res) {
         { role: 'system', content: cSystem },
         { role: 'user', content: cUser }
       ],
-      {
-        model: MODEL_BC,
-        temperature: 0.4,
-        max_tokens: 500
-      }
+      { model: MODEL_BC, temperature: 0.4, max_tokens: 500 }
     );
     cOutput = String(cOutput || '').trim();
 
-    // 念のための最小形
     if (!isMeaningful(cOutput, 20)) {
       cOutput = [
         '# 今日の雰囲気',
@@ -137,8 +136,8 @@ export default async function handler(req, res) {
         '# 演出強度',
         '70',
         '',
-        '# 禁止事項',
-        '- なし'
+        '# あいの受け入れ状態',
+        'YES'
       ].join('\n');
     }
 
