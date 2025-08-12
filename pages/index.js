@@ -1,15 +1,25 @@
+// pages/index.js
 import { useEffect, useRef, useState } from 'react';
 
 export default function Home() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [prevB, setPrevB] = useState('');
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState([]); // Notionの最新1〜3件
   const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false); // ← IME変換中フラグ
+
   const bottomRef = useRef(null);
 
-  useEffect(() => { loadHistory(); }, []);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // 起動時に履歴ロード
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  // メッセージ更新ごとに最下部へスクロール
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   async function loadHistory() {
     try {
@@ -23,21 +33,34 @@ export default function Home() {
   async function sendMessage() {
     if (!input.trim() || sending) return;
     setSending(true);
+
     try {
+      // 1) 最新ログ（1〜3件）取得
       const logs = await (await fetch('/api/fetchLogs')).json();
 
-      const bc = await (await fetch('/api/generateBC', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logs, prevB })
-      })).json();
+      // 2) B/C 生成
+      const bc = await (
+        await fetch('/api/generateBC', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logs, prevB })
+        })
+      ).json();
 
-      const chat = await (await fetch('/api/chatA', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bOutput: bc.bOutput, cOutput: bc.cOutput, userMessage: input })
-      })).json();
+      // 3) A で応答
+      const chat = await (
+        await fetch('/api/chatA', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bOutput: bc.bOutput,
+            cOutput: bc.cOutput,
+            userMessage: input
+          })
+        })
+      ).json();
 
+      // 画面に反映
       const newMsgs = [
         ...messages,
         { role: 'user', content: input },
@@ -46,13 +69,18 @@ export default function Home() {
       setMessages(newMsgs);
       setPrevB(bc.bOutput);
 
+      // 4) Notionに保存
       const transcript = `User: ${input}\nAssistant: ${chat.reply}`;
       await fetch('/api/saveLog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: `会話 ${new Date().toISOString()}`, text: transcript })
+        body: JSON.stringify({
+          title: `会話 ${new Date().toISOString()}`,
+          text: transcript
+        })
       });
 
+      // 5) 下部の履歴も更新
       await loadHistory();
       setInput('');
     } catch (e) {
@@ -63,58 +91,133 @@ export default function Home() {
     }
   }
 
+  // Enter送信（Shift+Enterは改行）＋ IME変換中は送信しない
   function onKeyDown(e) {
+    // 変換中検知（ブラウザ差異吸収: isComposing / keyCode 229 など）
+    const isIME =
+      composing || e.isComposing || e.nativeEvent?.isComposing || e.keyCode === 229;
+
+    // Cmd/Ctrl + Enter で送信（長文派向けショートカット）
+    const metaSend = (e.ctrlKey || e.metaKey) && e.key === 'Enter';
+    if (metaSend) {
+      e.preventDefault();
+      if (!isIME) sendMessage();
+      return;
+    }
+
+    // 通常の Enter 送信（Shift+Enterは改行）
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (isIME) return; // ← 変換確定Enterはここで無視
       e.preventDefault();
       sendMessage();
     }
   }
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: 16, fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial' }}>
+    <div
+      style={{
+        maxWidth: 800,
+        margin: '0 auto',
+        padding: 16,
+        fontFamily:
+          'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial'
+      }}
+    >
       <h1 style={{ fontSize: 22, marginBottom: 12 }}>omni Trinity Chat</h1>
 
-      <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, height: 420, overflowY: 'auto', background: '#fafafa', marginBottom: 12 }}>
-        {messages.length === 0 && <div style={{ color: '#6b7280' }}>ここに会話が表示されます。</div>}
+      {/* チャット表示 */}
+      <div
+        style={{
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 12,
+          height: 420,
+          overflowY: 'auto',
+          background: '#fafafa',
+          marginBottom: 12
+        }}
+      >
+        {messages.length === 0 && (
+          <div style={{ color: '#6b7280' }}>ここに会話が表示されます。</div>
+        )}
         {messages.map((m, i) => (
           <div key={i} style={{ margin: '8px 0' }}>
-            <div style={{ fontWeight: 600 }}>{m.role === 'user' ? 'You' : 'Assistant'}</div>
+            <div style={{ fontWeight: 600 }}>
+              {m.role === 'user' ? 'You' : 'Assistant'}
+            </div>
             <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
+      {/* 入力欄 */}
       <div style={{ display: 'flex', gap: 8 }}>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="メッセージを入力（Enterで送信 / Shift+Enterで改行）"
+          onCompositionStart={() => setComposing(true)}  // ← 変換開始
+          onCompositionEnd={() => setComposing(false)}   // ← 変換終了
+          placeholder="メッセージを入力（Enterで送信 / Shift+Enterで改行 / Cmd/Ctrl+Enterでも送信）"
           rows={3}
-          style={{ flex: 1, resize: 'vertical', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10 }}
+          style={{
+            flex: 1,
+            resize: 'vertical',
+            border: '1px solid #e5e7eb',
+            borderRadius: 8,
+            padding: 10
+          }}
         />
         <button
           onClick={sendMessage}
           disabled={sending || !input.trim()}
-          style={{ minWidth: 120, border: 0, borderRadius: 8, padding: '0 16px', background: sending ? '#cbd5e1' : '#111827', color: 'white', cursor: sending ? 'not-allowed' : 'pointer' }}
+          style={{
+            minWidth: 120,
+            border: 0,
+            borderRadius: 8,
+            padding: '0 16px',
+            background: sending ? '#cbd5e1' : '#111827',
+            color: 'white',
+            cursor: sending ? 'not-allowed' : 'pointer'
+          }}
           title="Enterでも送信できます"
         >
           {sending ? '送信中…' : '送信'}
         </button>
       </div>
 
+      {/* 下部：Notionの最新履歴（1〜3件） */}
       <div style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 18, marginBottom: 8 }}>🗂 最新の保存履歴（Notion）</h2>
         {history.length === 0 ? (
           <div style={{ color: '#6b7280' }}>まだ履歴がありません。</div>
         ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 12 }}>
+          <ul
+            style={{
+              listStyle: 'none',
+              padding: 0,
+              margin: 0,
+              display: 'grid',
+              gap: 12
+            }}
+          >
             {history.map((h, idx) => (
-              <li key={idx} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: 'white' }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>{h.title ?? `履歴 ${idx + 1}`}</div>
+              <li
+                key={idx}
+                style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  padding: 12,
+                  background: 'white'
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                  {h.title ?? `履歴 ${idx + 1}`}
+                </div>
                 <div style={{ color: '#374151', whiteSpace: 'pre-wrap' }}>
-                  {(h.text || '').slice(0, 240)}{(h.text || '').length > 240 ? '…' : ''}
+                  {(h.text || '').slice(0, 240)}
+                  {(h.text || '').length > 240 ? '…' : ''}
                 </div>
               </li>
             ))}
