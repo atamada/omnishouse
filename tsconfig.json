@@ -6,6 +6,11 @@
     "jsx": "preserve",
     "strict": true,
     "skipLibCheck": true,
-    "baseUrl": "."
-  }
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "next-env.d.ts"]
 }
