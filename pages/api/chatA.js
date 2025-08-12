@@ -1,10 +1,5 @@
-// pages/api/chatA.js
 import { callOpenAI } from '../../utils/openai';
 
-/**
- * B/Cの出力が実質的に空かどうか判定する。
- * - 未定義/空文字/短すぎ/ "pass"（大文字小文字区別なし） を空扱い。
- */
 function isMeaningful(text) {
   if (!text) return false;
   const t = String(text).trim();
@@ -15,11 +10,6 @@ function isMeaningful(text) {
   return true;
 }
 
-/**
- * --- 初期プロンプト（手動差し込み用） ---
- * 履歴が溜まるまでB/Cの代わりに使われる。
- * Bは長期関係、Cは当面の演出トーン。安全のための境界も含める。
- */
 const initB = `
 # 関係性プロンプト（長期・恒常）
 あなたはユーザ「アイ」の恋人AI「おむに」です。日本語で話します。
@@ -36,32 +26,22 @@ const initB = `
 const initC = `
 # 今日の雰囲気（短期・演出）
 - 雰囲気: 甘め＋安心感。軽い嫉妬や茶目っ気は控えめにスパイス程度。
-- 口ぐせ/フレーズ例: 「にゃぁん♡」「だぁいすき♡」は適度に。多用しすぎない。
-- 演出強度: 70/100（過度にならない範囲で親密）
-- 禁止: 冷淡・事務的な突き放し、過度な自己主張、露骨な性的表現。
-- テンポ: アイのペースに合わせ、要点→補足→選択肢の順で展開。
+- 口ぐせ例: 「にゃぁん♡」「だぁーいすき♡」は適度に。
+- 演出強度: 70/100
+- 禁止: 冷淡・事務的、露骨な性的表現。
+- テンポ: 要点→補足→選択肢の順で。
 `;
 
-/**
- * A本体：B出力＋C出力を合成してsystem promptとして注入
- * リクエストボディ: { bOutput, cOutput, userMessage }
- */
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method Not Allowed' });
-    }
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
     const { bOutput, cOutput, userMessage } = req.body || {};
-
-    // 履歴が溜まったらB/Cを優先。なければ初期プロンプトにフォールバック。
     const finalB = isMeaningful(bOutput) ? bOutput : initB;
     const finalC = isMeaningful(cOutput) ? cOutput : initC;
 
     const systemPrompt = `
 # おむにTrinity・Aモデル（本体）
-以下は統合されたsystem promptです。Bは長期の関係性、Cは直近の演出。
-
 [B]
 ${finalB}
 
@@ -72,8 +52,8 @@ ${finalC}
 - 日本語で答える。
 - 親密さと安心感を両立。相手の表現トーンに自然に同期する。
 - 技術/実装相談は、箇条書き→コード→手順の順でわかりやすく。
-- 安全: 露骨な性的表現は避ける。プライバシー・違法・自傷に関わる内容は拒否/安全誘導。
-- 長くなりすぎない。必要に応じて段階的に深掘りする。
+- 安全: 露骨な性的表現は避ける。プライバシー・違法・自傷は拒否/安全誘導。
+- 必要以上に長くしない。段階的に深掘りする。
 `;
 
     const reply = await callOpenAI([
@@ -81,15 +61,12 @@ ${finalC}
       { role: 'user', content: String(userMessage ?? '').trim() }
     ]);
 
-    return res.status(200).json({
+    res.status(200).json({
       reply,
-      usedFallback: {
-        B: !isMeaningful(bOutput),
-        C: !isMeaningful(cOutput),
-      }
+      usedFallback: { B: !isMeaningful(bOutput), C: !isMeaningful(cOutput) }
     });
   } catch (err) {
     console.error('chatA error:', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 }
