@@ -2,7 +2,11 @@
 
 import { Client as NotionClient } from '@notionhq/client';
 import { callOpenAI } from '../../utils/openai';
-import { packMessages } from '../../utils/packer'; // あなたの環境でpackerのパスを合わせてね
+import { packMessages } from '../../utils/packer'; 
+import { readPageAsPlainText } from '../../lib/notionPrompts';
+const SYS1_PAGE_ID = process.env.NOTION_SYS1_PAGE_ID;
+const SYS2_PAGE_ID = process.env.NOTION_SYS2_PAGE_ID;
+// あなたの環境でpackerのパスを合わせてね
 
 // ===== ユーティリティ =====
 function isMeaningful(text) {
@@ -12,68 +16,6 @@ function isMeaningful(text) {
   if (t.length < 10) return false;
   if (/^(pass|no\s*change|skip)\b/i.test(t)) return false;
   return true;
-}
-
-// ===== Notion クライアントと読み出しヘルパ =====
-const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
-const SYS1_PAGE_ID = process.env.NOTION_SYS1_PAGE_ID; // 「システムプロンプト1（関係の全体像）」のページID
-const SYS2_PAGE_ID = process.env.NOTION_SYS2_PAGE_ID; // 「システムプロンプト2（最近のあいの気分）」のページID
-
-async function fetchAllBlocks(blockId) {
-  const blocks = [];
-  let start_cursor = undefined;
-  do {
-    const res = await notion.blocks.children.list({
-      block_id: blockId,
-      start_cursor,
-      page_size: 100,
-    });
-    blocks.push(...res.results);
-    start_cursor = res.has_more ? res.next_cursor : undefined;
-  } while (start_cursor);
-  return blocks;
-}
-
-function extractTextFromBlock(block) {
-  const rich = block[block.type]?.rich_text || [];
-  return rich.map((r) => r.plain_text).join('');
-}
-
-async function readPageAsPlainText(pageId, { fallback = '' } = {}) {
-  if (!pageId || !process.env.NOTION_API_KEY) return fallback;
-  try {
-    const blocks = await fetchAllBlocks(pageId);
-    const lines = [];
-    for (const b of blocks) {
-      switch (b.type) {
-        case 'paragraph':
-        case 'heading_1':
-        case 'heading_2':
-        case 'heading_3':
-        case 'quote':
-        case 'callout':
-        case 'bulleted_list_item':
-        case 'numbered_list_item':
-        case 'to_do':
-        case 'toggle':
-        case 'code':
-        case 'equation':
-          lines.push(extractTextFromBlock(b));
-          break;
-        case 'divider':
-          lines.push('\n---\n');
-          break;
-        default:
-          // 画像/ファイル/データベース等は今回は無視（必要なら拡張）
-          break;
-      }
-    }
-    const text = lines.join('\n').trim();
-    return text || fallback;
-  } catch (err) {
-    console.warn('[chatA] readPageAsPlainText fallback:', err?.message);
-    return fallback;
-  }
 }
 
 // ===== メインハンドラ =====
