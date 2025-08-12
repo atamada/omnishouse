@@ -1,12 +1,11 @@
-// chatA.js — Notion外出し対応版（そのままコピペで差し替えOK）
+// chatA.js — Notion外出し対応版（/lib/notionPrompts を利用）
 
-import { Client as NotionClient } from '@notionhq/client';
 import { callOpenAI } from '../../utils/openai';
-import { packMessages } from '../../utils/packer'; 
+import { packMessages } from '../../utils/packer'; // あなたの環境でpackerのパスを合わせてね
 import { readPageAsPlainText } from '../../lib/notionPrompts';
-const SYS1_PAGE_ID = process.env.NOTION_SYS1_PAGE_ID;
-const SYS2_PAGE_ID = process.env.NOTION_SYS2_PAGE_ID;
-// あなたの環境でpackerのパスを合わせてね
+
+const SYS1_PAGE_ID = process.env.NOTION_SYS1_PAGE_ID; // システムプロンプト1（関係の全体像）
+const SYS2_PAGE_ID = process.env.NOTION_SYS2_PAGE_ID; // システムプロンプト2（最近のあいの気分）
 
 // ===== ユーティリティ =====
 function isMeaningful(text) {
