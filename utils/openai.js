@@ -10,7 +10,10 @@ export async function callOpenAI(messages) {
       messages
     })
   });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenAI API error: ${res.status} ${text}`);
+  }
   const data = await res.json();
-  return data.choices[0].message.content;
+  return data.choices?.[0]?.message?.content ?? '';
 }
-
